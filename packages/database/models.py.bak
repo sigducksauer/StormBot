@@ -1,0 +1,334 @@
+"""
+packages/database/models.py
+Modelos SQLAlchemy — schema completo do VendBot
+"""
+from __future__ import annotations
+
+import enum
+import uuid
+from datetime import datetime
+
+from sqlalchemy import (
+    BigInteger, Boolean, Column, DateTime, Enum, Float,
+    ForeignKey, Integer, JSON, String, Text, UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.sql import func
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def gen_uuid() -> str:
+    return str(uuid.uuid4())
+
+
+# ── Enums ──────────────────────────────────────────────────────
+class PlanType(str, enum.Enum):
+    SIMPLES    = "simples"
+    STANDARD   = "standard"
+    PREMIUM    = "premium"
+    ENTERPRISE = "enterprise"
+
+
+class OrderStatus(str, enum.Enum):
+    PENDING   = "pending"
+    PAID      = "paid"
+    DELIVERED = "delivered"
+    REFUNDED  = "refunded"
+    EXPIRED   = "expired"
+    FAILED    = "failed"
+
+
+class PaymentMethod(str, enum.Enum):
+    PIX         = "pix"
+    CREDIT_CARD = "credit_card"
+    BOLETO      = "boleto"
+    STRIPE      = "stripe"
+    MANUAL      = "manual"
+
+
+class ProductType(str, enum.Enum):
+    DIGITAL = "digital"
+    KEY     = "key"
+    ROLE    = "role"
+    CHANNEL = "channel"
+    WEBHOOK = "webhook"
+
+
+class GatewayType(str, enum.Enum):
+    MERCADOPAGO = "mercadopago"
+    STRIPE      = "stripe"
+    PIX_MANUAL  = "pix_manual"
+    VENDPAY     = "vendpay"
+
+
+# ── Users ──────────────────────────────────────────────────────
+class User(Base):
+    __tablename__ = "users"
+
+    id         = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    discord_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    username   = Column(String(100), nullable=False)
+    email      = Column(String(255), unique=True, nullable=True)
+    avatar     = Column(String(512))
+    is_active  = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    servers       = relationship("Server",       back_populates="owner")
+    subscriptions = relationship("Subscription", back_populates="user")
+
+
+# ── Servers ─────────────────────────────────────────────────────
+class Server(Base):
+    __tablename__ = "servers"
+
+    id               = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    discord_id       = Column(BigInteger, unique=True, nullable=False, index=True)
+    owner_id         = Column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
+    # Guarda o discord_id do dono para auto-claim caso ele não tenha logado ainda
+    owner_discord_id = Column(BigInteger, nullable=True, index=True)
+    name             = Column(String(255), nullable=False)
+    icon             = Column(String(512))
+    is_active        = Column(Boolean, default=True)
+    plan             = Column(Enum(PlanType), default=PlanType.SIMPLES, nullable=False)
+    fee_override     = Column(Float, nullable=True)
+    settings         = Column(JSON, default=dict)
+    created_at       = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at       = Column(DateTime(timezone=True), onupdate=func.now())
+
+    owner         = relationship("User",           back_populates="servers")
+    products      = relationship("Product",        back_populates="server", cascade="all, delete-orphan")
+    orders        = relationship("Order",          back_populates="server", cascade="all, delete-orphan")
+    gateways      = relationship("PaymentGateway", back_populates="server", cascade="all, delete-orphan")
+    embed_configs = relationship("EmbedConfig",    back_populates="server", cascade="all, delete-orphan")
+    coupons       = relationship("Coupon",         back_populates="server", cascade="all, delete-orphan")
+    customers     = relationship("Customer",       back_populates="server", cascade="all, delete-orphan")
+
+    @property
+    def fee_rate(self) -> float:
+        if self.fee_override is not None:
+            return self.fee_override
+        return {
+            PlanType.SIMPLES:    7.0,
+            PlanType.STANDARD:   4.0,
+            PlanType.PREMIUM:    2.0,
+            PlanType.ENTERPRISE: 1.0,
+        }.get(self.plan, 7.0)
+
+
+# ── Subscriptions ───────────────────────────────────────────────
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id             = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    user_id        = Column(UUID(as_uuid=False), ForeignKey("users.id"),   nullable=False)
+    server_id      = Column(UUID(as_uuid=False), ForeignKey("servers.id"), nullable=False)
+    plan           = Column(Enum(PlanType), nullable=False)
+    price_paid     = Column(Float, nullable=False)
+    gateway_sub_id = Column(String(255))
+    is_active      = Column(Boolean, default=True)
+    starts_at      = Column(DateTime(timezone=True), nullable=False)
+    ends_at        = Column(DateTime(timezone=True))
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="subscriptions")
+
+
+# ── Products ────────────────────────────────────────────────────
+class Product(Base):
+    __tablename__ = "products"
+
+    id             = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    server_id      = Column(UUID(as_uuid=False), ForeignKey("servers.id"), nullable=False, index=True)
+    name           = Column(String(255), nullable=False)
+    description    = Column(Text)
+    price          = Column(Float, nullable=False)
+    original_price = Column(Float)
+    product_type   = Column(Enum(ProductType), nullable=False, default=ProductType.KEY)
+    image_url      = Column(String(512))
+    is_active      = Column(Boolean, default=True)
+    stock          = Column(Integer, default=-1)
+    stock_alert    = Column(Integer, default=5)
+    sort_order     = Column(Integer, default=0)
+    metadata_      = Column("metadata", JSON, default=dict)
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at     = Column(DateTime(timezone=True), onupdate=func.now())
+
+    server   = relationship("Server",         back_populates="products")
+    variants = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
+    keys     = relationship("ProductKey",     back_populates="product", cascade="all, delete-orphan")
+
+
+class ProductVariant(Base):
+    __tablename__ = "product_variants"
+
+    id         = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    product_id = Column(UUID(as_uuid=False), ForeignKey("products.id"), nullable=False, index=True)
+    name       = Column(String(255), nullable=False)
+    price      = Column(Float, nullable=False)
+    stock      = Column(Integer, default=-1)
+    metadata_  = Column("metadata", JSON, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    product = relationship("Product", back_populates="variants")
+
+
+class ProductKey(Base):
+    __tablename__ = "product_keys"
+
+    id         = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    product_id = Column(UUID(as_uuid=False), ForeignKey("products.id"), nullable=False, index=True)
+    key_value  = Column(Text, nullable=False)
+    is_used    = Column(Boolean, default=False)
+    used_at    = Column(DateTime(timezone=True))
+    order_id   = Column(UUID(as_uuid=False), ForeignKey("orders.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    product = relationship("Product", back_populates="keys")
+
+
+# ── Customers ───────────────────────────────────────────────────
+class Customer(Base):
+    __tablename__ = "customers"
+    __table_args__ = (UniqueConstraint("server_id", "discord_id"),)
+
+    id             = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    server_id      = Column(UUID(as_uuid=False), ForeignKey("servers.id"), nullable=False, index=True)
+    discord_id     = Column(BigInteger, nullable=False, index=True)
+    username       = Column(String(100), nullable=False)
+    email          = Column(String(255))
+    total_spent    = Column(Float, default=0.0)
+    order_count    = Column(Integer, default=0)
+    is_blacklisted = Column(Boolean, default=False)
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at     = Column(DateTime(timezone=True), onupdate=func.now())
+
+    server = relationship("Server",  back_populates="customers")
+    orders = relationship("Order",   back_populates="customer")
+
+
+# ── Orders ──────────────────────────────────────────────────────
+class Order(Base):
+    __tablename__ = "orders"
+
+    id               = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    server_id        = Column(UUID(as_uuid=False), ForeignKey("servers.id"),   nullable=False, index=True)
+    customer_id      = Column(UUID(as_uuid=False), ForeignKey("customers.id"), nullable=False, index=True)
+    coupon_id        = Column(UUID(as_uuid=False), ForeignKey("coupons.id"),   nullable=True)
+    status           = Column(Enum(OrderStatus), default=OrderStatus.PENDING, nullable=False)
+    subtotal         = Column(Float, nullable=False)
+    discount         = Column(Float, default=0.0)
+    total            = Column(Float, nullable=False)
+    fee_rate         = Column(Float, nullable=False)
+    fee_amount       = Column(Float, nullable=False)
+    net_amount       = Column(Float, nullable=False)
+    payment_method   = Column(String(50), nullable=False)
+    gateway          = Column(String(50), nullable=False)
+    gateway_order_id = Column(String(255), nullable=True, index=True)
+    pix_code         = Column(Text)
+    pix_qr_url       = Column(Text)
+    metadata_        = Column("metadata", JSON, default=dict)
+    expires_at       = Column(DateTime(timezone=True))
+    paid_at          = Column(DateTime(timezone=True))
+    delivered_at     = Column(DateTime(timezone=True))
+    created_at       = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at       = Column(DateTime(timezone=True), onupdate=func.now())
+
+    server   = relationship("Server",    back_populates="orders")
+    customer = relationship("Customer",  back_populates="orders")
+    coupon   = relationship("Coupon")
+    items    = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+
+
+class OrderItem(Base):
+    __tablename__ = "order_items"
+
+    id          = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    order_id    = Column(UUID(as_uuid=False), ForeignKey("orders.id"),          nullable=False, index=True)
+    product_id  = Column(UUID(as_uuid=False), ForeignKey("products.id"),        nullable=False)
+    variant_id  = Column(UUID(as_uuid=False), ForeignKey("product_variants.id"), nullable=True)
+    quantity    = Column(Integer, default=1)
+    unit_price  = Column(Float, nullable=False)
+    total_price = Column(Float, nullable=False)
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())
+
+    order   = relationship("Order",   back_populates="items")
+    product = relationship("Product")
+
+
+# ── Payment Gateways ────────────────────────────────────────────
+class PaymentGateway(Base):
+    __tablename__ = "payment_gateways"
+    __table_args__ = (UniqueConstraint("server_id", "gateway_type"),)
+
+    id           = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    server_id    = Column(UUID(as_uuid=False), ForeignKey("servers.id"), nullable=False, index=True)
+    gateway_type = Column(Enum(GatewayType), nullable=False)
+    credentials  = Column(JSON, default=dict)
+    config       = Column(JSON, default=dict)
+    is_active    = Column(Boolean, default=True)
+    created_at   = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at   = Column(DateTime(timezone=True), onupdate=func.now())
+
+    server = relationship("Server", back_populates="gateways")
+
+
+# ── Embed Configs ───────────────────────────────────────────────
+class EmbedConfig(Base):
+    __tablename__ = "embed_configs"
+    __table_args__ = (UniqueConstraint("server_id", "name"),)
+
+    id            = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    server_id     = Column(UUID(as_uuid=False), ForeignKey("servers.id"), nullable=False, index=True)
+    name          = Column(String(100), nullable=False)
+    title         = Column(String(256))
+    description   = Column(Text)
+    color         = Column(String(10), default="#7c3aed")
+    thumbnail_url = Column(String(512))
+    image_url     = Column(String(512))
+    footer_text   = Column(String(2048))
+    footer_icon   = Column(String(512))
+    author_name   = Column(String(256))
+    author_icon   = Column(String(512))
+    fields        = Column(JSON, default=list)
+    created_at    = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at    = Column(DateTime(timezone=True), onupdate=func.now())
+
+    server = relationship("Server", back_populates="embed_configs")
+
+
+# ── Coupons ─────────────────────────────────────────────────────
+class Coupon(Base):
+    __tablename__ = "coupons"
+    __table_args__ = (UniqueConstraint("server_id", "code"),)
+
+    id             = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    server_id      = Column(UUID(as_uuid=False), ForeignKey("servers.id"), nullable=False, index=True)
+    code           = Column(String(50), nullable=False)
+    discount_type  = Column(String(10), nullable=False)
+    discount_value = Column(Float, nullable=False)
+    min_purchase   = Column(Float, default=0.0)
+    max_uses       = Column(Integer, default=-1)
+    used_count     = Column(Integer, default=0)
+    is_active      = Column(Boolean, default=True)
+    expires_at     = Column(DateTime(timezone=True))
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
+
+    server = relationship("Server", back_populates="coupons")
+
+
+# ── Webhook Configs ─────────────────────────────────────────────
+class WebhookConfig(Base):
+    __tablename__ = "webhook_configs"
+
+    id         = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    server_id  = Column(UUID(as_uuid=False), ForeignKey("servers.id"), nullable=False, index=True)
+    url        = Column(String(512), nullable=False)
+    secret     = Column(String(255))
+    events     = Column(JSON, default=list)
+    is_active  = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -1,0 +1,18 @@
+{
+  "name": "vendbot",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "db:migrate": "cd packages/database && alembic upgrade head",
+    "db:seed": "cd packages/database && python seeds/seed.py"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
