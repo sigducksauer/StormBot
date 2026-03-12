@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Headers de segurança em todas as respostas
+  output: "standalone",
   async headers() {
     return [
       {
@@ -14,7 +14,7 @@ const nextConfig = {
             key: "Content-Security-Policy",
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",  // Next.js precisa
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "font-src 'self' https://fonts.gstatic.com",
               "img-src 'self' data: https://cdn.discordapp.com https://avatars.githubusercontent.com",
@@ -25,17 +25,10 @@ const nextConfig = {
       },
     ];
   },
-
-  // Imagens externas permitidas
   images: {
     domains: ["cdn.discordapp.com", "avatars.githubusercontent.com"],
   },
-
-  // Compressão
   compress: true,
-
-  // Remover X-Powered-By
   poweredByHeader: false,
 };
-
 module.exports = nextConfig;
