@@ -16,3 +16,12 @@
     "node": ">=20.0.0"
   }
 }
+
+{
+  "name": "stormbots",
+  "version": "1.0.0",
+  "packageManager": "npm@10.8.2",
+  "scripts": {
+    "build": "turbo run build"
+  }
+}
