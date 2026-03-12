@@ -3,21 +3,19 @@ apps/api/database.py
 Conexão assíncrona com PostgreSQL via SQLAlchemy + asyncpg
 """
 from __future__ import annotations
-
 import os
 from typing import AsyncGenerator
-
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase
 
-# Importa Base dos modelos (única fonte de verdade)
-from packages.database.models import Base  # noqa: F401 — re-exportado para os routers
+class Base(DeclarativeBase):
+    pass
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+asyncpg://vendbot:senha@postgres:5432/vendbot",
 )
 
-# Normaliza URL
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
@@ -37,7 +35,6 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
     autocommit=False,
 )
-
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
